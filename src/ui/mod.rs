@@ -175,7 +175,7 @@ impl App {
 
     /// (Re)initializes the setup checklist/dir field from the current
     /// config and switches to the Setup page. Called both when jumping in
-    /// mid-session (`S`) and — indirectly, via `App::new` — on first run.
+    /// mid-session (`c`) and — indirectly, via `App::new` — on first run.
     fn enter_setup(&mut self) {
         let (agents, enabled) = setup_state_from(&self.config);
         self.setup_agents = agents;
@@ -184,6 +184,26 @@ impl App {
         self.setup_focus = SetupFocus::Agents;
         self.setup_dir = VimField::new(self.config.chats_dir.display().to_string());
         self.page = Mode::Setup;
+    }
+
+    /// Toggles the agent at the cursor and repositions it so enabled agents
+    /// always occupy the top of the list, in the order they were enabled:
+    /// turning one on moves it to the bottom of the enabled block (so it
+    /// picks up the next rank); turning one off moves it to the top of the
+    /// disabled block, right below the last remaining enabled agent. The
+    /// cursor follows the agent so repeated toggling doesn't lose your
+    /// place. `J`/`K` can still reorder freely on top of this.
+    fn setup_toggle(&mut self) {
+        let index = self.setup_cursor;
+        if index >= self.setup_agents.len() {
+            return;
+        }
+        let engine = self.setup_agents.remove(index);
+        let now_enabled = !self.setup_enabled.remove(index);
+        let insert_at = self.setup_enabled.iter().filter(|&&enabled| enabled).count();
+        self.setup_agents.insert(insert_at, engine);
+        self.setup_enabled.insert(insert_at, now_enabled);
+        self.setup_cursor = insert_at;
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<AppAction> {
@@ -468,11 +488,7 @@ impl App {
                             self.setup_cursor -= 1;
                         }
                     }
-                    KeyCode::Char(' ') | KeyCode::Enter => {
-                        if let Some(enabled) = self.setup_enabled.get_mut(self.setup_cursor) {
-                            *enabled = !*enabled;
-                        }
-                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => self.setup_toggle(),
                     _ => {}
                 }
                 Ok(AppAction::None)
@@ -741,9 +757,9 @@ fn next_engine(agents: &[Engine], current: Engine, delta: i32) -> Engine {
 /// Builds the setup checklist's (agents-in-rank-order, enabled-flags) pair
 /// from a config. Agents not yet in `config.enabled_agents` are appended
 /// (disabled) in `Engine::ALL` order — covers both a placeholder/first-run
-/// config and a newly-supported agent showing up in an existing config.
-/// On first run (no agents saved yet) everything starts enabled, so a user
-/// with every agent can just accept the defaults.
+/// config (nothing enabled yet, so everything starts unchecked — the user
+/// opts in to what they actually have) and a newly-supported agent showing
+/// up in an existing config (also unchecked, same reasoning).
 fn setup_state_from(config: &Config) -> (Vec<Engine>, Vec<bool>) {
     let mut order = config.enabled_agents.clone();
     for engine in Engine::ALL {
@@ -751,10 +767,9 @@ fn setup_state_from(config: &Config) -> (Vec<Engine>, Vec<bool>) {
             order.push(engine);
         }
     }
-    let first_run = config.enabled_agents.is_empty();
     let enabled = order
         .iter()
-        .map(|engine| first_run || config.enabled_agents.contains(engine))
+        .map(|engine| config.enabled_agents.contains(engine))
         .collect();
     (order, enabled)
 }
@@ -824,4 +839,51 @@ pub fn run_tui(
         std::thread::sleep(Duration::from_millis(60));
     }
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> App {
+        let config = Config {
+            enabled_agents: Vec::new(),
+            chats_dir: PathBuf::from("/tmp/lmchatty-test"),
+        };
+        App::new(Mode::Setup, Vec::new(), config)
+    }
+
+    fn toggle(app: &mut App, engine: Engine) {
+        app.setup_cursor = app.setup_agents.iter().position(|&e| e == engine).unwrap();
+        app.setup_toggle();
+    }
+
+    #[test]
+    fn toggle_ranks_agents_in_selection_order_not_list_order() {
+        let mut app = test_app();
+        // Engine::ALL is [Claude, Codex, OpenCode]; select out of that
+        // order — rank should follow selection order, not list position.
+        toggle(&mut app, Engine::Claude);
+        toggle(&mut app, Engine::OpenCode);
+        toggle(&mut app, Engine::Codex);
+        assert_eq!(
+            app.setup_agents,
+            vec![Engine::Claude, Engine::OpenCode, Engine::Codex]
+        );
+        assert_eq!(app.setup_enabled, vec![true, true, true]);
+    }
+
+    #[test]
+    fn disabling_moves_to_top_of_disabled_block() {
+        let mut app = test_app();
+        for engine in [Engine::Claude, Engine::Codex, Engine::OpenCode] {
+            toggle(&mut app, engine);
+        }
+        toggle(&mut app, Engine::Claude); // disable it again
+        assert_eq!(
+            app.setup_agents,
+            vec![Engine::Codex, Engine::OpenCode, Engine::Claude]
+        );
+        assert_eq!(app.setup_enabled, vec![true, true, false]);
+    }
 }

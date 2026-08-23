@@ -31,11 +31,16 @@ fn home_dir() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("HOME is not set"))
 }
 
-/// Suggested, pre-filled `chats_dir` for the setup screen: visible right in
-/// $HOME, since conversation directories hold real working files rather than
-/// just app config.
+/// Suggested, pre-filled `chats_dir` for the setup screen:
+/// `${XDG_DATA_HOME:-~/.local/share}/lmchatty`, the standard XDG location
+/// for an app's own persistent user data (as opposed to `config_dir`'s
+/// settings or `sessions::state_dir`'s logs). Just a suggestion — the setup
+/// screen lets the user pick anywhere.
 pub fn default_chats_dir() -> Result<PathBuf> {
-    Ok(home_dir()?.join("lmchatty"))
+    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(data_home).join("lmchatty"));
+    }
+    home_dir().map(|home| home.join(".local/share/lmchatty"))
 }
 
 /// Loads `config.toml` if it exists. `None` means first run: the caller

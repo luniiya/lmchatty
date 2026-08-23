@@ -39,14 +39,22 @@ fn draw_header(frame: &mut Frame, area: Rect, right_text: &str) {
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Length(1)])
         .split(area);
-    let right_width = (right_text.chars().count() as u16).min(area.width);
+    // Inset the text row by 1 column on each side so "lmchatty" and the
+    // hints get an even 1-space margin from both edges; the rule below
+    // stays full-width for a clean edge-to-edge divider.
+    let inset = Rect {
+        x: rows[0].x + 1,
+        width: rows[0].width.saturating_sub(2),
+        ..rows[0]
+    };
+    let right_width = (right_text.chars().count() as u16).min(inset.width);
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Min(0), Constraint::Length(right_width)])
-        .split(rows[0]);
+        .split(inset);
     frame.render_widget(
         Paragraph::new(Span::styled(
-            " LMCHATTY",
+            "lmchatty",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -199,20 +207,30 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
         ])
         .split(engine_inner)[1];
     // One button per *enabled* agent, in rank order — a user with only one
-    // agent enabled just sees the one button.
+    // agent enabled just sees the one button. The `›` marker carries the
+    // selection independent of color, since a background-fill highlight
+    // alone can wash out or disappear entirely when the terminal/pane loses
+    // focus (many terminals and Zellij itself dim colors for inactive
+    // panes) — bold survives that better than color too, so it stays on
+    // the selected button even when Engine isn't the focused field.
     let mut spans = Vec::new();
     for (index, engine) in app.config.enabled_agents.iter().enumerate() {
         if index > 0 {
             spans.push(Span::raw("    "));
         }
-        let style = if *engine == app.engine && app.new_focus == NewFocus::Engine {
+        let selected = *engine == app.engine;
+        let marker = if selected { "› " } else { "  " };
+        let style = if selected && app.new_focus == NewFocus::Engine {
             Style::default()
                 .fg(Color::Black)
                 .bg(Color::Cyan)
                 .add_modifier(Modifier::BOLD)
+        } else if selected {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::Cyan)
         };
+        spans.push(Span::styled(marker, Style::default().fg(Color::Cyan)));
         spans.push(Span::styled(format!("[ {} ]", engine.label()), style));
     }
     frame.render_widget(
@@ -275,7 +293,7 @@ fn draw_setup(frame: &mut Frame, app: &mut App) {
         .constraints([
             Constraint::Length(list_height),
             Constraint::Length(3),
-            Constraint::Min(1),
+            Constraint::Min(0),
         ])
         .split(area);
 
@@ -336,7 +354,10 @@ fn draw_setup(frame: &mut Frame, app: &mut App) {
     } else {
         "j/k move · Space toggle · J/K reorder · Enter save · Esc/s/n leave".to_owned()
     };
-    frame.render_widget(Paragraph::new(help), chunks[2]);
+    // Anchored to the outer layout's bottom row (`sections[2]`), not the
+    // inner content chunks, so it sits flush with the terminal's last line
+    // like the Search/New pages' footers do.
+    frame.render_widget(Paragraph::new(help), sections[2]);
 }
 
 fn draw_modal(frame: &mut Frame, selected_title: Option<&str>, modal: &mut Modal) {

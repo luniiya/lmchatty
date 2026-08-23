@@ -20,10 +20,15 @@ picker.
   Any other time, `c` opens it from Search or New, pre-filled with the
   current config; `s`/`n`/Esc leave without saving.
 - The agent checklist: `j`/`k` moves the cursor, `Space`/`Enter` toggles an
-  agent on/off, `J`/`K` moves the highlighted agent up/down (reordering,
-  i.e. re-ranking, it). `Tab` switches to the chats-directory field, which is
-  pre-filled with a suggested default (`~/lmchatty`) — accept it with Enter
-  or clear and replace it.
+  agent on/off, `J`/`K` moves the highlighted agent up/down for manual
+  reordering. Enabling an agent moves it to the bottom of the enabled block
+  (so it picks up the next rank); disabling one moves it to the top of the
+  disabled block. Net effect: enabled agents stay grouped at the top, in the
+  order you enabled them, without needing `J`/`K` just to promote something
+  out of the disabled section — `J`/`K` is only for overriding that order.
+  `Tab` switches to the chats-directory field, which is pre-filled with a
+  suggested default (`${XDG_DATA_HOME:-~/.local/share}/lmchatty`) — accept
+  it with Enter or clear and replace it.
 - `lmchatty setup` also opens this page directly from the command line.
 
 ## Storage
@@ -40,10 +45,10 @@ picker.
 - The existing `~/.config/agents` tree is legacy/project material and must not
   be silently moved or deleted during this migration.
 
-Example (with the default `chats_dir` of `~/lmchatty`):
+Example (with the default `chats_dir` of `~/.local/share/lmchatty`):
 
 ```text
-~/lmchatty/
+~/.local/share/lmchatty/
 └── a1b2c3d4/
     ├── .lmchatty-meta
     └── Fix the parser/
