@@ -1,10 +1,11 @@
+use crate::config::Config;
 use crate::model::{Conversation, Engine};
 use anyhow::{anyhow, bail, Context, Result};
 use std::{
     collections::hash_map::DefaultHasher,
     fs,
     hash::{Hash, Hasher},
-    path::{Component, Path, PathBuf},
+    path::{Component, Path},
     process::Command,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -30,14 +31,9 @@ fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn lmchatty_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME").ok_or_else(|| anyhow!("HOME is not set"))?;
-    Ok(PathBuf::from(home).join(".config/lmchatty"))
-}
-
-pub fn load_conversations() -> Result<Vec<Conversation>> {
-    let root = lmchatty_dir()?;
-    fs::create_dir_all(&root).context("could not create the lmchatty directory")?;
+pub fn load_conversations(config: &Config) -> Result<Vec<Conversation>> {
+    let root = &config.chats_dir;
+    fs::create_dir_all(root).context("could not create the chats directory")?;
     let mut conversations = Vec::new();
     for entry in fs::read_dir(&root)? {
         let entry = entry?;
@@ -77,7 +73,11 @@ fn read_conversation(hash_dir: &Path, meta: &Path) -> Result<Conversation> {
         match key {
             "title" => title = Some(value.to_owned()),
             "icon" if !value.is_empty() => icon = value.to_owned(),
-            "engine" if value.eq_ignore_ascii_case("claude") => engine = Engine::Claude,
+            "engine" => {
+                if let Some(parsed) = Engine::from_command(value) {
+                    engine = parsed;
+                }
+            }
             "pinned" => pinned = value == "true",
             "started" => started = value == "true",
             "created" => created = value.parse().unwrap_or_default(),
@@ -102,9 +102,13 @@ fn read_conversation(hash_dir: &Path, meta: &Path) -> Result<Conversation> {
     })
 }
 
-pub fn create_conversation(engine: Engine, requested_title: &str) -> Result<Conversation> {
-    let root = lmchatty_dir()?;
-    fs::create_dir_all(&root)?;
+pub fn create_conversation(
+    config: &Config,
+    engine: Engine,
+    requested_title: &str,
+) -> Result<Conversation> {
+    let root = &config.chats_dir;
+    fs::create_dir_all(root)?;
     let title = if requested_title.trim().is_empty() {
         default_title()
     } else {
@@ -112,7 +116,7 @@ pub fn create_conversation(engine: Engine, requested_title: &str) -> Result<Conv
     };
     validate_name(&title)?;
     let created = unix_now();
-    let hash = short_hash(&title, created, &root);
+    let hash = short_hash(&title, created, root);
     let hash_dir = root.join(&hash);
     let path = hash_dir.join(&title);
     let preset = root.join(PRESET_DIR);
@@ -192,8 +196,8 @@ pub fn trash_conversation(conversation: &Conversation) -> Result<()> {
     Ok(())
 }
 
-pub fn open_by_hash(hash: &str) -> Result<()> {
-    let conversation = load_conversations()?
+pub fn open_by_hash(config: &Config, hash: &str) -> Result<()> {
+    let conversation = load_conversations(config)?
         .into_iter()
         .find(|conversation| conversation.hash == hash || conversation.hash.starts_with(hash))
         .ok_or_else(|| anyhow!("no conversation matches hash '{hash}'"))?;

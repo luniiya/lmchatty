@@ -125,9 +125,11 @@ fn config_path_string() -> &'static str {
 /// Resume/continue flags per engine. Claude Code scopes `--continue` to the
 /// current directory; Codex's `resume --last` picks the most recent session,
 /// which is equivalent since each conversation has its own working directory.
+/// OpenCode's TUI mode supports the same `--continue` convention (confirmed
+/// via https://opencode.ai/docs/cli — see CLAUDE.md).
 fn resume_args(engine: Engine) -> &'static [&'static str] {
     match engine {
-        Engine::Claude => &["--continue"],
+        Engine::Claude | Engine::OpenCode => &["--continue"],
         Engine::Codex => &["resume", "--last"],
     }
 }

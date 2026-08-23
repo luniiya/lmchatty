@@ -10,9 +10,10 @@ use crossterm::{
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{backend::CrosstermBackend, layout::Rect, widgets::ListState, Terminal};
-use std::{io, time::Duration};
+use std::{fs, io, path::PathBuf, time::Duration};
 
 use crate::{
+    config::{self, Config},
     model::{Conversation, Engine, Mode},
     storage::{
         create_conversation, load_conversations, rename_conversation, trash_conversation,
@@ -37,6 +38,12 @@ enum NewFocus {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetupFocus {
+    Agents,
+    Dir,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditKind {
     Rename,
     Icon,
@@ -55,7 +62,11 @@ enum AppAction {
 }
 
 pub(crate) struct App {
+    config: Config,
     page: Mode,
+    /// Page to return to when leaving Setup (via `s`, Esc, or after a
+    /// successful save) without quitting the app entirely.
+    return_to: Mode,
     search: VimField,
     title: VimField,
     icon: VimField,
@@ -74,21 +85,47 @@ pub(crate) struct App {
     new_icon_rect: Rect,
     modal_rect: Rect,
     list_state: ListState,
+    // Setup page state. `setup_agents`/`setup_enabled` are parallel arrays;
+    // position in `setup_agents` is the agent's launch-priority rank.
+    setup_agents: Vec<Engine>,
+    setup_enabled: Vec<bool>,
+    setup_cursor: usize,
+    setup_focus: SetupFocus,
+    setup_dir: VimField,
 }
 
 impl App {
-    fn new(page: Mode, conversations: Vec<Conversation>) -> Self {
-        let search_focused = matches!(&page, Mode::Search);
+    fn new(page: Mode, conversations: Vec<Conversation>, config: Config) -> Self {
+        // An empty `enabled_agents` only ever happens on the placeholder
+        // config main.rs builds when config.toml doesn't exist yet — a real
+        // saved config always has at least one agent.
+        let needs_setup = config.enabled_agents.is_empty();
+        let return_to = if matches!(page, Mode::Setup) {
+            Mode::Search
+        } else {
+            page.clone()
+        };
+        let initial_page = if needs_setup { Mode::Setup } else { page };
+        let search_focused = matches!(&initial_page, Mode::Search);
         let mut search = VimField::new("");
         search.set_normal();
+        let engine = config
+            .enabled_agents
+            .first()
+            .copied()
+            .unwrap_or(Engine::Claude);
+        let (setup_agents, setup_enabled) = setup_state_from(&config);
+        let setup_dir = VimField::new(config.chats_dir.display().to_string());
         Self {
-            page,
+            config,
+            page: initial_page,
+            return_to,
             search,
             title: VimField::new(""),
             icon: VimField::new(""),
             search_focused,
             new_focus: NewFocus::Engine,
-            engine: Engine::Codex,
+            engine,
             conversations,
             selected: 0,
             list_pending_g: false,
@@ -101,6 +138,11 @@ impl App {
             new_icon_rect: Rect::default(),
             modal_rect: Rect::default(),
             list_state: ListState::default(),
+            setup_agents,
+            setup_enabled,
+            setup_cursor: 0,
+            setup_focus: SetupFocus::Agents,
+            setup_dir,
         }
     }
 
@@ -122,13 +164,26 @@ impl App {
     }
 
     fn reload(&mut self) {
-        match load_conversations() {
+        match load_conversations(&self.config) {
             Ok(conversations) => {
                 self.conversations = conversations;
                 self.clamp_selection();
             }
             Err(error) => self.status = error.to_string(),
         }
+    }
+
+    /// (Re)initializes the setup checklist/dir field from the current
+    /// config and switches to the Setup page. Called both when jumping in
+    /// mid-session (`S`) and — indirectly, via `App::new` — on first run.
+    fn enter_setup(&mut self) {
+        let (agents, enabled) = setup_state_from(&self.config);
+        self.setup_agents = agents;
+        self.setup_enabled = enabled;
+        self.setup_cursor = 0;
+        self.setup_focus = SetupFocus::Agents;
+        self.setup_dir = VimField::new(self.config.chats_dir.display().to_string());
+        self.page = Mode::Setup;
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Result<AppAction> {
@@ -141,6 +196,7 @@ impl App {
         match &self.page {
             Mode::Search => self.handle_search_key(key),
             Mode::New => self.handle_new_key(key),
+            Mode::Setup => self.handle_setup_key(key),
             Mode::Chat(_) => Ok(AppAction::Quit),
         }
     }
@@ -159,6 +215,11 @@ impl App {
         if key.code == KeyCode::Char('/') && self.search.mode == VimMode::Normal {
             self.search_focused = true;
             self.search.set_insert();
+            return Ok(AppAction::None);
+        }
+        if key.code == KeyCode::Char('c') && self.search.mode != VimMode::Insert {
+            self.return_to = Mode::Search;
+            self.enter_setup();
             return Ok(AppAction::None);
         }
         if self.search_focused {
@@ -251,6 +312,11 @@ impl App {
             self.search.set_normal();
             return Ok(AppAction::None);
         }
+        if key.code == KeyCode::Char('c') && can_search {
+            self.return_to = Mode::New;
+            self.enter_setup();
+            return Ok(AppAction::None);
+        }
         if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
             // Terminals report Shift+Tab as its own BackTab code, not Tab
             // with a Shift modifier — check both so backwards navigation
@@ -278,21 +344,15 @@ impl App {
             return Ok(AppAction::None);
         }
         if self.new_focus == NewFocus::Engine {
+            let agents = self.config.enabled_agents.clone();
             match key.code {
                 KeyCode::Char('j') | KeyCode::Char('l') | KeyCode::Down | KeyCode::Right => {
-                    self.engine = Engine::Codex
+                    self.engine = next_engine(&agents, self.engine, 1)
                 }
                 KeyCode::Char('k') | KeyCode::Char('h') | KeyCode::Up | KeyCode::Left => {
-                    self.engine = Engine::Claude
+                    self.engine = next_engine(&agents, self.engine, -1)
                 }
-                KeyCode::Char('c') => self.engine = Engine::Claude,
-                KeyCode::Char('d') => self.engine = Engine::Codex,
-                KeyCode::Tab | KeyCode::Char(' ') => {
-                    self.engine = match self.engine {
-                        Engine::Claude => Engine::Codex,
-                        Engine::Codex => Engine::Claude,
-                    }
-                }
+                KeyCode::Char(' ') => self.engine = next_engine(&agents, self.engine, 1),
                 KeyCode::Enter => {
                     self.new_focus = NewFocus::Title;
                     self.title.set_insert();
@@ -328,7 +388,8 @@ impl App {
             return Ok(AppAction::None);
         }
         if matches!(self.icon.handle(key), FieldResult::Submit) {
-            let mut conversation = create_conversation(self.engine, &self.title.text())?;
+            let mut conversation =
+                create_conversation(&self.config, self.engine, &self.title.text())?;
             let icon = self.icon.text();
             update_icon(&conversation, &icon)?;
             conversation.icon = if icon.trim().is_empty() {
@@ -339,6 +400,131 @@ impl App {
             return Ok(AppAction::Open(conversation));
         }
         Ok(AppAction::None)
+    }
+
+    fn handle_setup_key(&mut self, key: KeyEvent) -> Result<AppAction> {
+        // Setup is mandatory (can't be cancelled away from) exactly when
+        // there's no saved config yet to fall back to.
+        let mandatory = self.config.enabled_agents.is_empty();
+        let dir_normal = self.setup_dir.mode == VimMode::Normal;
+        if !mandatory && self.setup_focus == SetupFocus::Agents {
+            match key.code {
+                KeyCode::Char('s') => {
+                    self.page = Mode::Search;
+                    self.search_focused = true;
+                    self.search.set_normal();
+                    return Ok(AppAction::None);
+                }
+                KeyCode::Char('n') => {
+                    self.page = Mode::New;
+                    self.new_focus = NewFocus::Engine;
+                    return Ok(AppAction::None);
+                }
+                KeyCode::Esc => {
+                    self.page = self.return_to.clone();
+                    return Ok(AppAction::None);
+                }
+                _ => {}
+            }
+        }
+        if !mandatory && key.code == KeyCode::Esc && dir_normal {
+            self.page = self.return_to.clone();
+            return Ok(AppAction::None);
+        }
+        if key.code == KeyCode::Tab || key.code == KeyCode::BackTab {
+            self.setup_focus = match self.setup_focus {
+                SetupFocus::Agents => {
+                    self.setup_dir.set_insert();
+                    SetupFocus::Dir
+                }
+                SetupFocus::Dir => {
+                    self.setup_dir.set_normal();
+                    SetupFocus::Agents
+                }
+            };
+            return Ok(AppAction::None);
+        }
+        match self.setup_focus {
+            SetupFocus::Agents => {
+                let last = self.setup_agents.len().saturating_sub(1);
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.setup_cursor = (self.setup_cursor + 1).min(last)
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => {
+                        self.setup_cursor = self.setup_cursor.saturating_sub(1)
+                    }
+                    KeyCode::Char('J') => {
+                        if self.setup_cursor < last {
+                            self.setup_agents.swap(self.setup_cursor, self.setup_cursor + 1);
+                            self.setup_enabled.swap(self.setup_cursor, self.setup_cursor + 1);
+                            self.setup_cursor += 1;
+                        }
+                    }
+                    KeyCode::Char('K') => {
+                        if self.setup_cursor > 0 {
+                            self.setup_agents.swap(self.setup_cursor, self.setup_cursor - 1);
+                            self.setup_enabled.swap(self.setup_cursor, self.setup_cursor - 1);
+                            self.setup_cursor -= 1;
+                        }
+                    }
+                    KeyCode::Char(' ') | KeyCode::Enter => {
+                        if let Some(enabled) = self.setup_enabled.get_mut(self.setup_cursor) {
+                            *enabled = !*enabled;
+                        }
+                    }
+                    _ => {}
+                }
+                Ok(AppAction::None)
+            }
+            SetupFocus::Dir => {
+                if matches!(self.setup_dir.handle(key), FieldResult::Submit) {
+                    self.submit_setup()?;
+                }
+                Ok(AppAction::None)
+            }
+        }
+    }
+
+    fn submit_setup(&mut self) -> Result<()> {
+        let enabled_agents: Vec<Engine> = self
+            .setup_agents
+            .iter()
+            .copied()
+            .zip(self.setup_enabled.iter().copied())
+            .filter_map(|(engine, on)| on.then_some(engine))
+            .collect();
+        if enabled_agents.is_empty() {
+            self.status = "enable at least one coding agent".into();
+            return Ok(());
+        }
+        let raw = self.setup_dir.text();
+        let trimmed = raw.trim();
+        let chats_dir = if trimmed.is_empty() {
+            config::default_chats_dir()?
+        } else {
+            expand_home(trimmed)
+        };
+        if let Err(error) = fs::create_dir_all(&chats_dir) {
+            self.status = format!("could not create {}: {error}", chats_dir.display());
+            return Ok(());
+        }
+        let new_config = Config {
+            enabled_agents,
+            chats_dir,
+        };
+        new_config.save()?;
+        self.config = new_config;
+        self.engine = self
+            .config
+            .enabled_agents
+            .first()
+            .copied()
+            .unwrap_or(Engine::Claude);
+        self.status = "Settings saved".into();
+        self.page = self.return_to.clone();
+        self.reload();
+        Ok(())
     }
 
     fn handle_modal_key(&mut self, key: KeyEvent) -> Result<AppAction> {
@@ -383,10 +569,8 @@ impl App {
                                 })
                             }
                             2 => {
-                                let next = match conversation.engine {
-                                    Engine::Claude => Engine::Codex,
-                                    Engine::Codex => Engine::Claude,
-                                };
+                                let next =
+                                    next_engine(&self.config.enabled_agents, conversation.engine, 1);
                                 update_engine(&conversation, next)?;
                                 self.status = format!("Coding agent set to {}", next.label());
                                 self.reload();
@@ -442,7 +626,7 @@ impl App {
         match &self.page {
             Mode::Search => self.handle_search_mouse(mouse),
             Mode::New => self.handle_new_mouse(mouse),
-            Mode::Chat(_) => Ok(AppAction::None),
+            Mode::Chat(_) | Mode::Setup => Ok(AppAction::None),
         }
     }
 
@@ -485,12 +669,10 @@ impl App {
             return Ok(AppAction::None);
         }
         if point_in(self.new_engine_rect, mouse.column, mouse.row) {
-            let midpoint = self.new_engine_rect.x + self.new_engine_rect.width / 2;
-            self.engine = if mouse.column < midpoint {
-                Engine::Claude
-            } else {
-                Engine::Codex
-            };
+            // Agent buttons are laid out dynamically (one per enabled
+            // agent), so a click just cycles forward rather than hit-testing
+            // individual button rects.
+            self.engine = next_engine(&self.config.enabled_agents, self.engine, 1);
             self.new_focus = NewFocus::Engine;
         } else if point_in(self.new_title_rect, mouse.column, mouse.row) {
             self.new_focus = NewFocus::Title;
@@ -542,14 +724,62 @@ fn point_in(rect: Rect, x: u16, y: u16) -> bool {
     x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height
 }
 
-pub fn run_tui(page: Mode, conversations: Vec<Conversation>) -> Result<Option<Conversation>> {
+/// Cycles to the next (delta=1) or previous (delta=-1) agent in `agents`,
+/// wrapping around. Falls back to the first agent if `current` isn't in the
+/// list (e.g. a conversation's engine was later disabled) and to `current`
+/// unchanged if `agents` is empty.
+fn next_engine(agents: &[Engine], current: Engine, delta: i32) -> Engine {
+    if agents.is_empty() {
+        return current;
+    }
+    let index = agents.iter().position(|&engine| engine == current).unwrap_or(0);
+    let len = agents.len() as i32;
+    let next = (index as i32 + delta).rem_euclid(len) as usize;
+    agents[next]
+}
+
+/// Builds the setup checklist's (agents-in-rank-order, enabled-flags) pair
+/// from a config. Agents not yet in `config.enabled_agents` are appended
+/// (disabled) in `Engine::ALL` order — covers both a placeholder/first-run
+/// config and a newly-supported agent showing up in an existing config.
+/// On first run (no agents saved yet) everything starts enabled, so a user
+/// with every agent can just accept the defaults.
+fn setup_state_from(config: &Config) -> (Vec<Engine>, Vec<bool>) {
+    let mut order = config.enabled_agents.clone();
+    for engine in Engine::ALL {
+        if !order.contains(&engine) {
+            order.push(engine);
+        }
+    }
+    let first_run = config.enabled_agents.is_empty();
+    let enabled = order
+        .iter()
+        .map(|engine| first_run || config.enabled_agents.contains(engine))
+        .collect();
+    (order, enabled)
+}
+
+fn expand_home(path: &str) -> PathBuf {
+    match path.strip_prefix("~/").or_else(|| (path == "~").then_some("")) {
+        Some(rest) => std::env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join(rest))
+            .unwrap_or_else(|| PathBuf::from(path)),
+        None => PathBuf::from(path),
+    }
+}
+
+pub fn run_tui(
+    page: Mode,
+    conversations: Vec<Conversation>,
+    config: Config,
+) -> Result<Option<Conversation>> {
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     enable_raw_mode()?;
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let mut app = App::new(page, conversations);
+    let mut app = App::new(page, conversations, config);
     let result = loop {
         terminal.draw(|frame| render::draw(frame, &mut app))?;
         if !event::poll(Duration::from_millis(100))? {

@@ -4,9 +4,31 @@
 a small, fast, Vim-friendly terminal application rather than an agent-folder
 picker.
 
+## Setup and configuration
+
+- Settings live in `${XDG_CONFIG_HOME:-~/.config}/lmchatty/config.toml`: which
+  coding agents are enabled and their rank (`enabled_agents`, an ordered
+  list — position is launch priority), and the conversations root
+  (`chats_dir`). This path is fixed and not itself configurable.
+- Agents are opt-in per user, not a single global default: someone with only
+  a Codex subscription enables just Codex; someone with several enables all
+  of them and ranks the one they reach for first as #1. At least one agent
+  must stay enabled.
+- Setup is a page within the same TUI, not a separate program. On first run,
+  if `config.toml` doesn't exist, it opens automatically before any other
+  page and can't be left until saved (there's nothing to fall back to yet).
+  Any other time, `c` opens it from Search or New, pre-filled with the
+  current config; `s`/`n`/Esc leave without saving.
+- The agent checklist: `j`/`k` moves the cursor, `Space`/`Enter` toggles an
+  agent on/off, `J`/`K` moves the highlighted agent up/down (reordering,
+  i.e. re-ranking, it). `Tab` switches to the chats-directory field, which is
+  pre-filled with a suggested default (`~/lmchatty`) — accept it with Enter
+  or clear and replace it.
+- `lmchatty setup` also opens this page directly from the command line.
+
 ## Storage
 
-- Conversations live under `~/.config/lmchatty`.
+- Conversations live under the configured `chats_dir` (see above).
 - Each conversation has a short stable hash directory.
 - The hash directory contains a directory named after the conversation title.
 - The title directory is the working directory for the selected coding agent.
@@ -18,10 +40,10 @@ picker.
 - The existing `~/.config/agents` tree is legacy/project material and must not
   be silently moved or deleted during this migration.
 
-Example:
+Example (with the default `chats_dir` of `~/lmchatty`):
 
 ```text
-~/.config/lmchatty/
+~/lmchatty/
 └── a1b2c3d4/
     ├── .lmchatty-meta
     └── Fix the parser/
@@ -31,8 +53,14 @@ Example:
 
 - `lmchatty` and `lmchatty search` open the search page.
 - `lmchatty new` opens the new-conversation page.
-- `/` jumps to the search page.
+- `lmchatty setup` opens the setup page (see above).
+- `/` jumps to the search page. `c` jumps to setup from Search or New.
 - `--chat HASH` opens a conversation directly.
+
+Every page shares one header: the app name on the left, right-aligned key
+hints for the pages actually reachable from where you are, and a rule
+underneath. On the mandatory first-run setup page the hints are replaced
+with "first run", since nothing else is reachable yet.
 
 The search page has a focused search field at the top by default. Search
 filters conversation titles. Escape enters normal mode; `j`, `k`, `gg`, and `G`
@@ -40,9 +68,9 @@ navigate conversations. Enter opens the selected conversation. Space opens
 actions such as rename, icon change, pin/unpin, and move to trash. `n` opens
 the new-conversation page.
 
-The new-conversation page asks for Claude or Codex, then a title. Empty titles
-get the timestamp default. Enter creates the directory and starts the chosen
-agent.
+The new-conversation page asks for a coding agent — one button per *enabled*
+agent, in rank order — then a title. Empty titles get the timestamp default.
+Enter creates the directory and starts the chosen agent.
 
 Text fields should support Vim-style insert/normal editing, including `i`,
 `a`, `A`, `h/j/k/l`, `gg`, `G`, `0`, `$`, `x`, `D`, and undo where practical.
@@ -50,8 +78,8 @@ Text fields should support Vim-style insert/normal editing, including `i`,
 ## Agent sessions
 
 - Every conversation runs in its own Zellij session named `lmchatty-HASH`.
-- The selected `claude` or `codex` command starts with the title directory as
-  its current working directory.
+- The selected agent's command (`claude`, `codex`, or `opencode`) starts with
+  the title directory as its current working directory.
 - Reopening a conversation reattaches to or switches to its existing Zellij
   session.
 - tmux is not part of the new lmchatty flow.

@@ -1,4 +1,4 @@
-use super::{App, EditKind, Modal, NewFocus};
+use super::{App, EditKind, Modal, NewFocus, SetupFocus};
 use crate::storage::created_label;
 use crate::vim::VimMode;
 use ratatui::{
@@ -13,6 +13,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     match &app.page {
         crate::model::Mode::Search => draw_search(frame, app),
         crate::model::Mode::New => draw_new(frame, app),
+        crate::model::Mode::Setup => draw_setup(frame, app),
         crate::model::Mode::Chat(_) => {}
     }
     let selected_title = app
@@ -30,6 +31,40 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Shared top bar for every page: the app name on the left, right-aligned
+/// key hints, and a thin rule underneath separating it from page content.
+/// Always exactly 2 rows tall.
+fn draw_header(frame: &mut Frame, area: Rect, right_text: &str) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(area);
+    let right_width = (right_text.chars().count() as u16).min(area.width);
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(right_width)])
+        .split(rows[0]);
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            " LMCHATTY",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )),
+        cols[0],
+    );
+    frame.render_widget(
+        Paragraph::new(Span::styled(right_text, Style::default().fg(Color::DarkGray)))
+            .alignment(Alignment::Right),
+        cols[1],
+    );
+    let rule = "─".repeat(area.width as usize);
+    frame.render_widget(
+        Paragraph::new(Span::styled(rule, Style::default().fg(Color::DarkGray))),
+        rows[1],
+    );
+}
+
 fn draw_search(frame: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -42,18 +77,7 @@ fn draw_search(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
     app.search_rect = chunks[1];
     app.list_rect = chunks[2];
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                " lmchatty ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  [n] new conversation"),
-        ])),
-        chunks[0],
-    );
+    draw_header(frame, chunks[0], "n new  ·  c setup");
     let title = if app.search_focused {
         format!("Search / {}", vim_label(app.search.mode))
     } else {
@@ -144,18 +168,7 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
             Constraint::Length(1),
         ])
         .split(frame.area());
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled(
-                " lmchatty ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  [s] search conversations"),
-        ])),
-        sections[0],
-    );
+    draw_header(frame, sections[0], "s search  ·  c setup");
     let area = sections[1];
     frame.render_widget(Clear, area);
     let chunks = Layout::default()
@@ -170,23 +183,6 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
     app.new_engine_rect = chunks[0];
     app.new_title_rect = chunks[1];
     app.new_icon_rect = chunks[2];
-    let claude = if app.engine == crate::model::Engine::Claude && app.new_focus == NewFocus::Engine
-    {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Cyan)
-    };
-    let codex = if app.engine == crate::model::Engine::Codex && app.new_focus == NewFocus::Engine {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Cyan)
-    };
     let engine_block = Block::default()
         .borders(Borders::ALL)
         .title("Choose a coding agent");
@@ -202,13 +198,25 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
             Constraint::Fill(1),
         ])
         .split(engine_inner)[1];
+    // One button per *enabled* agent, in rank order — a user with only one
+    // agent enabled just sees the one button.
+    let mut spans = Vec::new();
+    for (index, engine) in app.config.enabled_agents.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw("    "));
+        }
+        let style = if *engine == app.engine && app.new_focus == NewFocus::Engine {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        spans.push(Span::styled(format!("[ {} ]", engine.label()), style));
+    }
     frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("[ Claude ]", claude),
-            Span::raw("    "),
-            Span::styled("[ Codex ]", codex),
-        ]))
-        .alignment(Alignment::Center),
+        Paragraph::new(Line::from(spans)).alignment(Alignment::Center),
         engine_line_area,
     );
     app.title
@@ -236,6 +244,99 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
         Paragraph::new("Tab next · Shift-Tab previous · Enter next · Ctrl+Q quit"),
         sections[2],
     );
+}
+
+fn draw_setup(frame: &mut Frame, app: &mut App) {
+    // Mirrors `App::handle_setup_key`'s `mandatory` check: no saved config
+    // yet means there's nowhere else to go, so the header can't advertise
+    // shortcuts that don't work.
+    let mandatory = app.config.enabled_agents.is_empty();
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Min(1),
+            Constraint::Length(1),
+        ])
+        .split(frame.area());
+    let right = if mandatory {
+        "first run".to_owned()
+    } else {
+        "n new  ·  s search".to_owned()
+    };
+    draw_header(frame, sections[0], &right);
+
+    let area = sections[1];
+    frame.render_widget(Clear, area);
+    let list_height = app.setup_agents.len() as u16 + 2;
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(0)
+        .constraints([
+            Constraint::Length(list_height),
+            Constraint::Length(3),
+            Constraint::Min(1),
+        ])
+        .split(area);
+
+    let mut rank = 0;
+    let items: Vec<ListItem> = app
+        .setup_agents
+        .iter()
+        .zip(app.setup_enabled.iter())
+        .enumerate()
+        .map(|(index, (engine, enabled))| {
+            let cursor = if index == app.setup_cursor && app.setup_focus == SetupFocus::Agents {
+                "› "
+            } else {
+                "  "
+            };
+            let rank_label = if *enabled {
+                rank += 1;
+                format!("{rank}. ")
+            } else {
+                "   ".to_owned()
+            };
+            let marker = if *enabled { "[x]" } else { "[ ]" };
+            let style = if index == app.setup_cursor && app.setup_focus == SetupFocus::Agents {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(Span::styled(
+                format!("{cursor}{rank_label}{marker} {}", engine.label()),
+                style,
+            )))
+        })
+        .collect();
+    frame.render_widget(
+        List::new(items).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Enabled coding agents · rank = launch order"),
+        ),
+        chunks[0],
+    );
+
+    app.setup_dir.area.set_block(Block::default().borders(Borders::ALL).title(
+        if app.setup_focus == SetupFocus::Dir {
+            format!("Chats directory · {}", vim_label(app.setup_dir.mode))
+        } else {
+            "Chats directory".into()
+        },
+    ));
+    frame.render_widget(&app.setup_dir.area, chunks[1]);
+
+    let help = if !app.status.is_empty() {
+        app.status.clone()
+    } else if mandatory {
+        "j/k move · Space toggle · J/K reorder · Tab switch field · Enter continue".to_owned()
+    } else {
+        "j/k move · Space toggle · J/K reorder · Enter save · Esc/s/n leave".to_owned()
+    };
+    frame.render_widget(Paragraph::new(help), chunks[2]);
 }
 
 fn draw_modal(frame: &mut Frame, selected_title: Option<&str>, modal: &mut Modal) {
