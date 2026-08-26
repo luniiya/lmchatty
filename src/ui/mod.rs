@@ -35,6 +35,7 @@ enum NewFocus {
     Engine,
     Title,
     Icon,
+    Template,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +84,7 @@ pub(crate) struct App {
     new_engine_rect: Rect,
     new_title_rect: Rect,
     new_icon_rect: Rect,
+    new_template_rect: Rect,
     modal_rect: Rect,
     list_state: ListState,
     // Setup page state. `setup_agents`/`setup_enabled` are parallel arrays;
@@ -92,6 +94,17 @@ pub(crate) struct App {
     setup_cursor: usize,
     setup_focus: SetupFocus,
     setup_dir: VimField,
+    // New-conversation page's template picker. `templates` is `default`
+    // first, then the rest alphabetically; `template_index` is an index
+    // into `templates` followed by one synthetic "(none)" slot at the end
+    // (`templates.len()` itself), so `templates.len()` always means "(none)".
+    templates: Vec<String>,
+    template_index: usize,
+    /// Set whenever there's 0 or 1 real templates — not an error, just a
+    /// nudge shown inline (`Some("Only 'default' — add more at <path>")` or
+    /// similar). Missing/unreadable templates get a separate desktop
+    /// notification + log warning from `templates::list`, not this.
+    template_hint: Option<String>,
 }
 
 impl App {
@@ -116,7 +129,7 @@ impl App {
             .unwrap_or(Engine::Claude);
         let (setup_agents, setup_enabled) = setup_state_from(&config);
         let setup_dir = VimField::new(config.chats_dir.display().to_string());
-        Self {
+        let mut app = Self {
             config,
             page: initial_page,
             return_to,
@@ -136,6 +149,7 @@ impl App {
             new_engine_rect: Rect::default(),
             new_title_rect: Rect::default(),
             new_icon_rect: Rect::default(),
+            new_template_rect: Rect::default(),
             modal_rect: Rect::default(),
             list_state: ListState::default(),
             setup_agents,
@@ -143,7 +157,17 @@ impl App {
             setup_cursor: 0,
             setup_focus: SetupFocus::Agents,
             setup_dir,
+            templates: Vec::new(),
+            template_index: 0,
+            template_hint: None,
+        };
+        // Only scan the templates directory (and possibly seed/warn) when
+        // actually landing on the New page — no need for that I/O just to
+        // open Search.
+        if matches!(app.page, Mode::New) {
+            app.refresh_templates();
         }
+        app
     }
 
     fn visible(&self) -> Vec<Conversation> {
@@ -184,6 +208,28 @@ impl App {
         self.setup_focus = SetupFocus::Agents;
         self.setup_dir = VimField::new(self.config.chats_dir.display().to_string());
         self.page = Mode::Setup;
+    }
+
+    /// Switches to the New page and (re)scans the templates directory, so
+    /// a template added since the app started shows up immediately.
+    fn enter_new(&mut self) {
+        self.page = Mode::New;
+        self.new_focus = NewFocus::Engine;
+        self.refresh_templates();
+    }
+
+    fn refresh_templates(&mut self) {
+        self.templates = crate::templates::list();
+        self.template_index = 0;
+        self.template_hint = if self.templates.len() <= 1 {
+            let root = crate::templates::root_display();
+            Some(match self.templates.first() {
+                Some(name) => format!("Only '{name}' — add more at {root}"),
+                None => format!("No templates yet — add one at {root}"),
+            })
+        } else {
+            None
+        };
     }
 
     /// Toggles the agent at the cursor and repositions it so enabled agents
@@ -274,9 +320,8 @@ impl App {
                     self.modal = Some(Modal::Actions { selected: 0 })
                 }
                 KeyCode::Char('n') => {
-                    self.page = Mode::New;
                     self.search_focused = false;
-                    self.new_focus = NewFocus::Engine;
+                    self.enter_new();
                 }
                 KeyCode::Enter => {
                     return Ok(self
@@ -294,10 +339,7 @@ impl App {
                     self.search_focused = true;
                     self.search.set_insert();
                 }
-                KeyCode::Char('n') => {
-                    self.page = Mode::New;
-                    self.new_focus = NewFocus::Engine;
-                }
+                KeyCode::Char('n') => self.enter_new(),
                 KeyCode::Char('j') | KeyCode::Down => {
                     self.selected = self
                         .selected
@@ -322,7 +364,7 @@ impl App {
 
     fn handle_new_key(&mut self, key: KeyEvent) -> Result<AppAction> {
         let can_search = match self.new_focus {
-            NewFocus::Engine => true,
+            NewFocus::Engine | NewFocus::Template => true,
             NewFocus::Title => self.title.mode == VimMode::Normal,
             NewFocus::Icon => self.icon.mode == VimMode::Normal,
         };
@@ -345,13 +387,15 @@ impl App {
             self.new_focus = match (self.new_focus, backwards) {
                 (NewFocus::Engine, false) => NewFocus::Title,
                 (NewFocus::Title, false) => NewFocus::Icon,
-                (NewFocus::Icon, false) => NewFocus::Engine,
-                (NewFocus::Engine, true) => NewFocus::Icon,
+                (NewFocus::Icon, false) => NewFocus::Template,
+                (NewFocus::Template, false) => NewFocus::Engine,
+                (NewFocus::Engine, true) => NewFocus::Template,
                 (NewFocus::Title, true) => NewFocus::Engine,
                 (NewFocus::Icon, true) => NewFocus::Title,
+                (NewFocus::Template, true) => NewFocus::Icon,
             };
             match self.new_focus {
-                NewFocus::Engine => {}
+                NewFocus::Engine | NewFocus::Template => {}
                 NewFocus::Title => self.title.set_insert(),
                 NewFocus::Icon => self.icon.set_insert(),
             }
@@ -398,26 +442,52 @@ impl App {
             }
             return Ok(AppAction::None);
         }
-        if key.code == KeyCode::Char('/') && self.icon.mode == VimMode::Normal {
-            self.page = Mode::Search;
-            self.search_focused = true;
-            self.search.set_normal();
+        if self.new_focus == NewFocus::Icon {
+            if key.code == KeyCode::Char('/') && self.icon.mode == VimMode::Normal {
+                self.page = Mode::Search;
+                self.search_focused = true;
+                self.search.set_normal();
+                return Ok(AppAction::None);
+            }
+            if key.code == KeyCode::Esc && self.icon.mode == VimMode::Normal {
+                return Ok(AppAction::None);
+            }
+            if matches!(self.icon.handle(key), FieldResult::Submit) {
+                self.new_focus = NewFocus::Template;
+            }
             return Ok(AppAction::None);
         }
-        if key.code == KeyCode::Esc && self.icon.mode == VimMode::Normal {
-            return Ok(AppAction::None);
-        }
-        if matches!(self.icon.handle(key), FieldResult::Submit) {
-            let mut conversation =
-                create_conversation(&self.config, self.engine, &self.title.text())?;
-            let icon = self.icon.text();
-            update_icon(&conversation, &icon)?;
-            conversation.icon = if icon.trim().is_empty() {
-                "⬜".into()
-            } else {
-                icon.trim().chars().take(2).collect()
-            };
-            return Ok(AppAction::Open(conversation));
+        // NewFocus::Template — a picker like Engine's, not a text field: the
+        // last slot (index == self.templates.len()) is always the synthetic
+        // "(none)" option.
+        let last = self.templates.len();
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.template_index = (self.template_index + 1).min(last)
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.template_index = self.template_index.saturating_sub(1)
+            }
+            KeyCode::Char(' ') => self.template_index = (self.template_index + 1) % (last + 1),
+            KeyCode::Enter => {
+                let template = self.templates.get(self.template_index).cloned();
+                let mut conversation = create_conversation(
+                    &self.config,
+                    self.engine,
+                    &self.title.text(),
+                    template.as_deref(),
+                )?;
+                let icon = self.icon.text();
+                update_icon(&conversation, &icon)?;
+                conversation.icon = if icon.trim().is_empty() {
+                    "⬜".into()
+                } else {
+                    icon.trim().chars().take(2).collect()
+                };
+                return Ok(AppAction::Open(conversation));
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {}
+            _ => {}
         }
         Ok(AppAction::None)
     }
@@ -436,8 +506,7 @@ impl App {
                     return Ok(AppAction::None);
                 }
                 KeyCode::Char('n') => {
-                    self.page = Mode::New;
-                    self.new_focus = NewFocus::Engine;
+                    self.enter_new();
                     return Ok(AppAction::None);
                 }
                 KeyCode::Esc => {
@@ -696,6 +765,12 @@ impl App {
         } else if point_in(self.new_icon_rect, mouse.column, mouse.row) {
             self.new_focus = NewFocus::Icon;
             self.icon.set_insert();
+        } else if point_in(self.new_template_rect, mouse.column, mouse.row) {
+            // Same simplification as the agent buttons above: cycle rather
+            // than hit-test individual list rows.
+            let last = self.templates.len();
+            self.template_index = (self.template_index + 1) % (last + 1);
+            self.new_focus = NewFocus::Template;
         }
         Ok(AppAction::None)
     }

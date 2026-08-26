@@ -12,12 +12,11 @@ use std::{
 
 const DEFAULT_ICON: &str = "⬜";
 const META_FILE: &str = ".lmchatty-meta";
-/// A directory of files under the lmchatty root that gets copied into every
-/// new conversation's working directory (e.g. a default CLAUDE.md/AGENTS.md).
-/// Not itself treated as a conversation since it has no `.lmchatty-meta`.
-const PRESET_DIR: &str = "preset";
 
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+/// Recursively copies `source` into `destination`, creating `destination`.
+/// Used by `templates::copy_into` to seed a new conversation's working
+/// directory from the picked template.
+pub(crate) fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir_all(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -106,6 +105,7 @@ pub fn create_conversation(
     config: &Config,
     engine: Engine,
     requested_title: &str,
+    template: Option<&str>,
 ) -> Result<Conversation> {
     let root = &config.chats_dir;
     fs::create_dir_all(root)?;
@@ -119,12 +119,9 @@ pub fn create_conversation(
     let hash = short_hash(&title, created, root);
     let hash_dir = root.join(&hash);
     let path = hash_dir.join(&title);
-    let preset = root.join(PRESET_DIR);
-    if preset.is_dir() {
-        copy_dir_recursive(&preset, &path)
-            .with_context(|| format!("could not copy preset from {}", preset.display()))?;
-    } else {
-        fs::create_dir_all(&path)?;
+    match template {
+        Some(name) => crate::templates::copy_into(name, &path)?,
+        None => fs::create_dir_all(&path)?,
     }
     let conversation = Conversation {
         hash,

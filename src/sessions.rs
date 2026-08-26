@@ -122,15 +122,18 @@ fn config_path_string() -> &'static str {
     concat!(env!("CARGO_MANIFEST_DIR"), "/zellij-config.kdl")
 }
 
-/// Resume/continue flags per engine. Claude Code scopes `--continue` to the
-/// current directory; Codex's `resume --last` picks the most recent session,
-/// which is equivalent since each conversation has its own working directory.
-/// OpenCode's TUI mode supports the same `--continue` convention (confirmed
-/// via https://opencode.ai/docs/cli — see CLAUDE.md).
+/// Resume flags per engine, used once a conversation has been opened
+/// before. Claude's `--resume` and Codex's `resume` (no `--last`) both open
+/// an interactive picker over past sessions in the current directory,
+/// rather than silently continuing whichever was most recent. OpenCode has
+/// no such single-command picker (confirmed against its own docs — see
+/// CLAUDE.md), so it keeps `--continue` (auto-continues the last session)
+/// as the best available option.
 fn resume_args(engine: Engine) -> &'static [&'static str] {
     match engine {
-        Engine::Claude | Engine::OpenCode => &["--continue"],
-        Engine::Codex => &["resume", "--last"],
+        Engine::Claude => &["--resume"],
+        Engine::Codex => &["resume"],
+        Engine::OpenCode => &["--continue"],
     }
 }
 

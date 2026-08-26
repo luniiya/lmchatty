@@ -3,6 +3,7 @@ mod config;
 mod model;
 mod sessions;
 mod storage;
+mod templates;
 mod ui;
 mod vim;
 

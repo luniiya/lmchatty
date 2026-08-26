@@ -25,6 +25,14 @@ fn config_dir() -> Result<PathBuf> {
     home_dir().map(|home| home.join(".config/lmchatty"))
 }
 
+/// `${XDG_CONFIG_HOME:-~/.config}/lmchatty/templates` — a directory of named
+/// subdirectories, each one copied wholesale into a new conversation's
+/// working directory when picked on the new-conversation page. See
+/// `src/templates.rs`.
+pub fn templates_dir() -> Result<PathBuf> {
+    Ok(config_dir()?.join("templates"))
+}
+
 fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)

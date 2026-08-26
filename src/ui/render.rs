@@ -179,6 +179,10 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
     draw_header(frame, sections[0], "s search  ·  c setup");
     let area = sections[1];
     frame.render_widget(Clear, area);
+    // Template gets a fixed height sized to its actual entries (+ "(none)"
+    // + borders) rather than Title's old Min(1) — Title is the field that
+    // should scale with the window.
+    let template_height = (app.templates.len() as u16 + 1 + 2).max(3);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .margin(0)
@@ -186,11 +190,13 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
             Constraint::Length(5),
             Constraint::Min(1),
             Constraint::Length(3),
+            Constraint::Length(template_height),
         ])
         .split(area);
     app.new_engine_rect = chunks[0];
     app.new_title_rect = chunks[1];
     app.new_icon_rect = chunks[2];
+    app.new_template_rect = chunks[3];
     let engine_block = Block::default()
         .borders(Borders::ALL)
         .title("Choose a coding agent");
@@ -258,8 +264,44 @@ fn draw_new(frame: &mut Frame, app: &mut App) {
             },
         ));
     frame.render_widget(&app.icon.area, icon_area);
+
+    // Template picker: `default` first, then the rest alphabetically
+    // (already sorted that way by `templates::list`), "(none)" always last.
+    let template_items: Vec<ListItem> = app
+        .templates
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once("(none)"))
+        .enumerate()
+        .map(|(index, label)| {
+            let selected = index == app.template_index;
+            let marker = if selected { "› " } else { "  " };
+            let style = if selected && app.new_focus == NewFocus::Template {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if selected {
+                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(Line::from(Span::styled(format!("{marker}{label}"), style)))
+        })
+        .collect();
+    let template_title = match &app.template_hint {
+        Some(hint) => format!("Template · {hint}"),
+        None => "Template".to_owned(),
+    };
     frame.render_widget(
-        Paragraph::new("Tab next · Shift-Tab previous · Enter next · Ctrl+Q quit"),
+        List::new(template_items).block(Block::default().borders(Borders::ALL).title(template_title)),
+        chunks[3],
+    );
+
+    frame.render_widget(
+        Paragraph::new(
+            "Tab next · Shift-Tab previous · j/k · Enter create/select · Ctrl+Q quit",
+        ),
         sections[2],
     );
 }

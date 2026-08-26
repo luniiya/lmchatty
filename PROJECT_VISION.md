@@ -31,6 +31,25 @@ picker.
   it with Enter or clear and replace it.
 - `lmchatty setup` also opens this page directly from the command line.
 
+## Templates
+
+- Templates live in `${XDG_CONFIG_HOME:-~/.config}/lmchatty/templates/` —
+  config-side, not under `chats_dir`, since they're reusable across
+  conversations rather than being conversation content themselves. Each
+  subdirectory is one named template, copied wholesale into a new
+  conversation's working directory when picked.
+- A starter `default` template (containing an example `agents.md`) is
+  auto-seeded the first time the templates directory doesn't exist yet. If
+  it's later deleted and no templates remain, creating a conversation still
+  works — it just starts with an empty directory, same as picking `(none)`
+  — but a desktop notification and a log line flag the gap so it doesn't go
+  unnoticed silently.
+- The new-conversation page's template picker lists `default` first (if
+  present), the rest alphabetically, and `(none)` always last as an explicit
+  opt-out. When there's only one real template (or zero), the picker shows
+  an inline hint pointing at the templates directory instead of pretending
+  there's a real choice to make.
+
 ## Storage
 
 - Conversations live under the configured `chats_dir` (see above).
@@ -73,9 +92,11 @@ navigate conversations. Enter opens the selected conversation. Space opens
 actions such as rename, icon change, pin/unpin, and move to trash. `n` opens
 the new-conversation page.
 
-The new-conversation page asks for a coding agent — one button per *enabled*
-agent, in rank order — then a title. Empty titles get the timestamp default.
-Enter creates the directory and starts the chosen agent.
+The new-conversation page asks, in order: a coding agent (one button per
+*enabled* agent, in rank order), a title (empty titles get the timestamp
+default), an icon, then a template (see above). Enter on the template step
+creates the directory — seeded from the picked template, or empty for
+`(none)` — and starts the chosen agent.
 
 Text fields should support Vim-style insert/normal editing, including `i`,
 `a`, `A`, `h/j/k/l`, `gg`, `G`, `0`, `$`, `x`, `D`, and undo where practical.

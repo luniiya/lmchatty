@@ -3,10 +3,19 @@ load_plugins {
     zellij:link
 }
 
-default_mode "locked"
+default_mode "normal"
 mouse_mode true
 pane_frames false
 session_serialization false
 show_release_notes false
 show_startup_tips false
 simplified_ui true
+
+// Machine-specific: matches this user's own Zellij setup (pywal-generated,
+// tracks the current wallpaper) instead of Zellij's compiled-in default
+// theme, which otherwise looks jarringly different from every other
+// terminal on this machine. Not portable to another machine/theme setup —
+// see PROJECT_VISION.md's "Desktop shortcuts" section for the same kind of
+// user-specific pragmatism already baked into this project.
+theme "pywal"
+theme_dir "/home/ayaya/.config/zellij/themes"
