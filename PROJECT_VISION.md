@@ -27,7 +27,7 @@ picker.
   order you enabled them, without needing `J`/`K` just to promote something
   out of the disabled section — `J`/`K` is only for overriding that order.
   `Tab` switches to the chats-directory field, which is pre-filled with a
-  suggested default (`${XDG_DATA_HOME:-~/.local/share}/lmchatty`) — accept
+  suggested default (`${XDG_CONFIG_HOME:-~/.config}/lmchattydata`) — accept
   it with Enter or clear and replace it.
 - `lmchatty setup` also opens this page directly from the command line.
 
@@ -38,7 +38,9 @@ picker.
   conversations rather than being conversation content themselves. Each
   subdirectory is one named template, copied wholesale into a new
   conversation's working directory when picked.
-- A starter `default` template (containing an example `agents.md`) is
+- A starter `default` template (an example `AGENTS.md`, plus a `CLAUDE.md`
+  that just imports it via `@AGENTS.md` — Claude Code doesn't read
+  `AGENTS.md` on its own) is
   auto-seeded the first time the templates directory doesn't exist yet. If
   it's later deleted and no templates remain, creating a conversation still
   works — it just starts with an empty directory, same as picking `(none)`
@@ -64,10 +66,10 @@ picker.
 - The existing `~/.config/agents` tree is legacy/project material and must not
   be silently moved or deleted during this migration.
 
-Example (with the default `chats_dir` of `~/.local/share/lmchatty`):
+Example (with the default `chats_dir` of `~/.config/lmchattydata`):
 
 ```text
-~/.local/share/lmchatty/
+~/.config/lmchattydata/
 └── a1b2c3d4/
     ├── .lmchatty-meta
     └── Fix the parser/

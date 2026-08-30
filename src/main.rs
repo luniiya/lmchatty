@@ -1,5 +1,6 @@
 mod args;
 mod config;
+mod hyprland;
 mod model;
 mod sessions;
 mod storage;
@@ -21,6 +22,8 @@ fn main() {
 }
 
 fn run() -> Result<()> {
+    hyprland::sync_window_rule();
+
     let mode = args::parse()?;
 
     // No saved config yet: build a placeholder with no enabled agents.

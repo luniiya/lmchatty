@@ -79,8 +79,9 @@ pub fn root_display() -> String {
 /// alphabetically, `(none)` is *not* included here — callers add that
 /// themselves since it's a UI concept, not a real directory.
 ///
-/// Auto-seeds a starter `default` template (with an example `agents.md`) the
-/// very first time this runs, i.e. when the templates directory doesn't
+/// Auto-seeds a starter `default` template (an example `AGENTS.md` plus a
+/// `CLAUDE.md` that just imports it via `@AGENTS.md`) the very first time
+/// this runs, i.e. when the templates directory doesn't
 /// exist yet at all. If that seeding fails, or the directory exists but
 /// turns out empty (e.g. a user deleted everything), this still returns an
 /// empty list rather than failing — a missing template is never fatal to
@@ -134,8 +135,14 @@ fn seed_default(root: &Path) -> Result<()> {
     let default_dir = root.join(DEFAULT_NAME);
     fs::create_dir_all(&default_dir)
         .with_context(|| format!("could not create {}", default_dir.display()))?;
-    fs::write(default_dir.join("agents.md"), DEFAULT_AGENTS_MD)
-        .with_context(|| format!("could not seed {}/agents.md", default_dir.display()))
+    fs::write(default_dir.join("AGENTS.md"), DEFAULT_AGENTS_MD)
+        .with_context(|| format!("could not seed {}/AGENTS.md", default_dir.display()))?;
+    // Claude Code doesn't read AGENTS.md on its own, but does support
+    // `@path` file imports in CLAUDE.md — so this just points at AGENTS.md
+    // instead of duplicating its content. Case matters: this must match
+    // AGENTS.md's filename exactly, filesystems here are case-sensitive.
+    fs::write(default_dir.join("CLAUDE.md"), "@AGENTS.md\n")
+        .with_context(|| format!("could not seed {}/CLAUDE.md", default_dir.display()))
 }
 
 fn warn(message: &str) {

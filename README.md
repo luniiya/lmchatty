@@ -27,7 +27,23 @@ lmchatty
 The first run asks which coding agents you actually want (Claude, Codex,
 OpenCode — enable only the ones you have, and reorder them with `J`/`K` to
 rank your favorite first) and where conversations should live, pre-filled
-with `~/.local/share/lmchatty` — press Enter to accept it or type your own
-path. This is
-saved to `~/.config/lmchatty/config.toml`. Press `c` from any page, or run
+with `~/.config/lmchattydata` — press Enter to accept it or type your own
+path. This is saved to `~/.config/lmchatty/config.toml`. Press `c` from any page, or run
 `lmchatty setup`, to change it later.
+
+### Hyprland
+
+On Hyprland, setup will offer to add a window rule that opens lmchatty as a
+compact floating side panel instead of a regular tiled window. It's
+self-maintaining (regenerated on every launch to match whichever terminal
+emulator you use), but it can only match a window by the title/class it had
+when the window was first mapped — lmchatty can't rename itself into a match
+after the fact. So whatever command launches lmchatty needs to open the
+terminal with its window title set to `lmchatty`, e.g.:
+
+```text
+ghostty --title=lmchatty -e lmchatty new
+```
+
+Bind that (or your terminal's equivalent `--title`/`--class` flag) to a key
+in your Hyprland config and the rule will apply from the next launch on.

@@ -150,12 +150,33 @@ fn layout_kdl(engine: Engine, resume: bool, cwd: &str) -> String {
             .map(|arg| format!("\"{arg}\""))
             .collect::<Vec<_>>()
             .join(" ");
-        format!(" {{\n        args {quoted}\n    }}")
+        format!(" {{\n            args {quoted}\n        }}")
     } else {
         String::new()
     };
+    // `tab` is the session's actual first tab (the agent); `new_tab_template`
+    // is the blueprint Zellij uses for tabs created afterward via the
+    // regular NewTab keybind. Without it, a new tab just repeats this same
+    // `tab` block — Zellij's multiplexing is the whole point of running the
+    // agent inside it, so a new tab re-launching the agent instead of
+    // opening a plain shell defeats that purpose.
     format!(
-        "layout {{\n    cwd \"{cwd}\"\n    pane command=\"{command}\"{args_block}\n    pane size=2 borderless=true {{\n        plugin location=\"zellij:status-bar\"\n    }}\n}}\n"
+        "layout {{
+    cwd \"{cwd}\"
+    tab name=\"agent\" {{
+        pane command=\"{command}\"{args_block}
+        pane size=2 borderless=true {{
+            plugin location=\"zellij:status-bar\"
+        }}
+    }}
+    new_tab_template {{
+        pane
+        pane size=2 borderless=true {{
+            plugin location=\"zellij:status-bar\"
+        }}
+    }}
+}}
+"
     )
 }
 

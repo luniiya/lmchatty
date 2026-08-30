@@ -465,6 +465,23 @@ fn draw_modal(frame: &mut Frame, selected_title: Option<&str>, modal: &mut Modal
                 area,
             );
         }
+        Modal::ConfirmHyprlandRule => {
+            let text = "Add a Hyprland window rule so lmchatty\n\
+                opens as a floating side panel?\n\n\
+                Appends one line to ~/.config/hypr/hyprland.lua.\n\
+                Also needs your launcher to pass\n\
+                --title=lmchatty (see README).\n\n\
+                y / Enter  confirm\nn / Esc    skip";
+            frame.render_widget(
+                Paragraph::new(text).alignment(Alignment::Center).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Confirm")
+                        .title_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ),
+                area,
+            );
+        }
     }
 }
 

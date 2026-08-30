@@ -33,6 +33,12 @@ pub fn templates_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join("templates"))
 }
 
+/// `${XDG_CONFIG_HOME:-~/.config}/lmchatty/hyprland.lua` — lmchatty's
+/// self-generated Hyprland window rule. See `src/hyprland.rs`.
+pub fn hyprland_snippet_path() -> Result<PathBuf> {
+    Ok(config_dir()?.join("hyprland.lua"))
+}
+
 fn home_dir() -> Result<PathBuf> {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -40,15 +46,14 @@ fn home_dir() -> Result<PathBuf> {
 }
 
 /// Suggested, pre-filled `chats_dir` for the setup screen:
-/// `${XDG_DATA_HOME:-~/.local/share}/lmchatty`, the standard XDG location
-/// for an app's own persistent user data (as opposed to `config_dir`'s
-/// settings or `sessions::state_dir`'s logs). Just a suggestion — the setup
-/// screen lets the user pick anywhere.
+/// `${XDG_CONFIG_HOME:-~/.config}/lmchattydata` — a sibling of `config_dir`
+/// rather than the XDG data dir, by explicit preference. Just a
+/// suggestion — the setup screen lets the user pick anywhere.
 pub fn default_chats_dir() -> Result<PathBuf> {
-    if let Some(data_home) = std::env::var_os("XDG_DATA_HOME") {
-        return Ok(PathBuf::from(data_home).join("lmchatty"));
+    if let Some(config_home) = std::env::var_os("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(config_home).join("lmchattydata"));
     }
-    home_dir().map(|home| home.join(".local/share/lmchatty"))
+    home_dir().map(|home| home.join(".config/lmchattydata"))
 }
 
 /// Loads `config.toml` if it exists. `None` means first run: the caller

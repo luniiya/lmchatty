@@ -7,7 +7,9 @@ use crossterm::{
         MouseButton, MouseEvent, MouseEventKind,
     },
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{
+        disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen, SetTitle,
+    },
 };
 use ratatui::{backend::CrosstermBackend, layout::Rect, widgets::ListState, Terminal};
 use std::{fs, io, path::PathBuf, time::Duration};
@@ -54,6 +56,7 @@ enum Modal {
     Actions { selected: usize },
     Edit { kind: EditKind, field: VimField },
     ConfirmTrash,
+    ConfirmHyprlandRule,
 }
 
 enum AppAction {
@@ -609,6 +612,9 @@ impl App {
         self.status = "Settings saved".into();
         self.page = self.return_to.clone();
         self.reload();
+        if crate::hyprland::needs_source_line() == Some(true) {
+            self.modal = Some(Modal::ConfirmHyprlandRule);
+        }
         Ok(())
     }
 
@@ -699,6 +705,16 @@ impl App {
                 }
                 KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => {}
                 _ => self.modal = Some(Modal::ConfirmTrash),
+            },
+            Modal::ConfirmHyprlandRule => match key.code {
+                KeyCode::Char('y') | KeyCode::Enter => {
+                    self.status = match crate::hyprland::write_source_line() {
+                        Ok(()) => "Hyprland window rule added".into(),
+                        Err(error) => format!("could not add Hyprland window rule: {error}"),
+                    };
+                }
+                KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => {}
+                _ => self.modal = Some(Modal::ConfirmHyprlandRule),
             },
         }
         Ok(AppAction::None)
@@ -866,7 +882,15 @@ pub fn run_tui(
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
     enable_raw_mode()?;
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+    // Fixed, app-controlled title (independent of how the terminal/launcher
+    // invoked us) so the Hyprland window rule lmchatty writes for itself
+    // (crate::hyprland) can match on it reliably.
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        SetTitle(crate::hyprland::WINDOW_TITLE)
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let mut app = App::new(page, conversations, config);
