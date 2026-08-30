@@ -89,6 +89,13 @@ fn zellij_has_session(name: &str) -> Result<bool> {
     ));
 
     if !output.status.success() {
+        // zellij exits non-zero (and prints this to stderr) when there are
+        // no sessions at all yet, e.g. right after install on a new
+        // machine. That's not a failure to report on — it just means the
+        // named session doesn't exist, same as an empty session list.
+        if stderr.trim() == "No active zellij sessions found." {
+            return Ok(false);
+        }
         bail!("zellij could not list sessions: {}", stderr.trim());
     }
 
