@@ -31,6 +31,17 @@ with `~/.config/lmchattydata` — press Enter to accept it or type your own
 path. This is saved to `~/.config/lmchatty/config.toml`. Press `c` from any page, or run
 `lmchatty setup`, to change it later.
 
+## Rename a conversation
+
+On the search page, select a conversation and press `r`, click `[Rename]`,
+or choose Rename from the Space actions menu. The title changes without moving
+the conversation's working directory, so an active agent keeps its path.
+
+From a shell inside a conversation, run `lmchatty rename --current "New title"`.
+You can also run `lmchatty rename HASH "New title"` from elsewhere. Existing
+conversations remain readable; their original directory name is used as the
+display title if metadata has no explicit title.
+
 ### Hyprland
 
 On Hyprland, setup will offer to add a window rule that opens lmchatty as a

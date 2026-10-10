@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 use config::Config;
 use model::Mode;
 use sessions::open_session;
-use storage::{load_conversations, open_by_hash};
+use storage::{load_conversations, open_by_hash, rename_by_hash, rename_current};
 
 fn main() {
     if let Err(error) = run() {
@@ -40,6 +40,10 @@ fn run() -> Result<()> {
     };
 
     match mode {
+        Mode::Rename { hash, title } => match hash {
+            Some(hash) => rename_by_hash(&config, &hash, &title),
+            None => rename_current(&config, &title),
+        },
         Mode::Chat(hash) => {
             if config.enabled_agents.is_empty() {
                 bail!("no coding agents are set up yet — run `lmchatty setup` first");

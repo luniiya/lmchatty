@@ -14,7 +14,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         crate::model::Mode::Search => draw_search(frame, app),
         crate::model::Mode::New => draw_new(frame, app),
         crate::model::Mode::Setup => draw_setup(frame, app),
-        crate::model::Mode::Chat(_) => {}
+        crate::model::Mode::Chat(_) | crate::model::Mode::Rename { .. } => {}
     }
     let selected_title = app
         .selected_conversation()
@@ -85,6 +85,7 @@ fn draw_search(frame: &mut Frame, app: &mut App) {
         .split(frame.area());
     app.search_rect = chunks[1];
     app.list_rect = chunks[2];
+    app.rename_rect = Rect::default();
     draw_header(frame, chunks[0], "n new  ·  c setup");
     let title = if app.search_focused {
         format!("Search / {}", vim_label(app.search.mode))
@@ -158,13 +159,24 @@ fn draw_search(frame: &mut Frame, app: &mut App) {
         )
         .highlight_symbol("› ");
     frame.render_stateful_widget(list, chunks[2], &mut app.list_state);
+    let footer = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Min(0), Constraint::Length(10)])
+        .split(chunks[3]);
     frame.render_widget(
         Paragraph::new(format!(
-            "{}  |  j/k move  Space actions  Ctrl+Q quit",
+            "{}  |  j/k move  Space actions  r rename  Ctrl+Q quit",
             app.status
         )),
-        chunks[3],
+        footer[0],
     );
+    if !app.visible().is_empty() {
+        app.rename_rect = footer[1];
+        frame.render_widget(
+            Paragraph::new("[Rename]").alignment(Alignment::Right),
+            footer[1],
+        );
+    }
 }
 
 fn draw_new(frame: &mut Frame, app: &mut App) {

@@ -60,6 +60,7 @@ pub fn load_conversations(config: &Config) -> Result<Vec<Conversation>> {
 fn read_conversation(hash_dir: &Path, meta: &Path) -> Result<Conversation> {
     let contents = fs::read_to_string(meta)?;
     let mut title = None;
+    let mut directory = None;
     let mut icon = DEFAULT_ICON.to_owned();
     let mut engine = Engine::Codex;
     let mut pinned = false;
@@ -71,6 +72,7 @@ fn read_conversation(hash_dir: &Path, meta: &Path) -> Result<Conversation> {
         };
         match key {
             "title" => title = Some(value.to_owned()),
+            "directory" => directory = Some(value.to_owned()),
             "icon" if !value.is_empty() => icon = value.to_owned(),
             "engine" => {
                 if let Some(parsed) = Engine::from_command(value) {
@@ -83,8 +85,27 @@ fn read_conversation(hash_dir: &Path, meta: &Path) -> Result<Conversation> {
             _ => {}
         }
     }
-    let title = title.ok_or_else(|| anyhow!("conversation metadata has no title"))?;
-    let path = hash_dir.join(&title);
+    // Older conversations used the title as their work-directory name.
+    // If metadata has neither field, a single work directory is unambiguous.
+    let directory = match directory.or_else(|| title.clone()) {
+        Some(directory) => directory,
+        None => {
+            let mut directories = fs::read_dir(hash_dir)?
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()));
+            let only = directories
+                .next()
+                .ok_or_else(|| anyhow!("conversation has no work directory"))?;
+            if directories.next().is_some() {
+                bail!("conversation has multiple work directories and no directory metadata");
+            }
+            only.file_name().to_string_lossy().into_owned()
+        }
+    };
+    validate_name(&directory)?;
+    let title = title.unwrap_or_else(|| directory.clone());
+    validate_title(&title)?;
+    let path = hash_dir.join(&directory);
     if !path.is_dir() {
         bail!("conversation directory is missing: {}", path.display());
     }
@@ -168,19 +189,42 @@ pub fn update_icon(conversation: &Conversation, icon: &str) -> Result<()> {
 
 pub fn rename_conversation(conversation: &Conversation, title: &str) -> Result<()> {
     let title = title.trim();
-    validate_name(title)?;
+    validate_title(title)?;
     if title == conversation.title {
         return Ok(());
     }
-    let destination = conversation.hash_dir.join(title);
-    if destination.exists() {
-        bail!("a conversation named '{title}' already exists");
-    }
-    fs::rename(&conversation.path, &destination)?;
     let mut updated = conversation.clone();
     updated.title = title.to_owned();
-    updated.path = destination;
     write_metadata(&updated)
+}
+
+pub fn rename_by_hash(config: &Config, hash: &str, title: &str) -> Result<()> {
+    let matches = load_conversations(config)?
+        .into_iter()
+        .filter(|conversation| conversation.hash == hash || conversation.hash.starts_with(hash))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [conversation] => rename_conversation(conversation, title),
+        [] => bail!("no conversation matches hash '{hash}'"),
+        _ => bail!("hash '{hash}' matches multiple conversations"),
+    }
+}
+
+pub fn rename_current(config: &Config, title: &str) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    rename_for_path(config, &cwd, title)
+}
+
+fn rename_for_path(config: &Config, cwd: &Path, title: &str) -> Result<()> {
+    let matches = load_conversations(config)?
+        .into_iter()
+        .filter(|conversation| cwd.starts_with(&conversation.path))
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [conversation] => rename_conversation(conversation, title),
+        [] => bail!("current directory is not inside a conversation"),
+        _ => bail!("current directory matches multiple conversations"),
+    }
 }
 
 pub fn trash_conversation(conversation: &Conversation) -> Result<()> {
@@ -203,8 +247,9 @@ pub fn open_by_hash(config: &Config, hash: &str) -> Result<()> {
 
 fn write_metadata(conversation: &Conversation) -> Result<()> {
     let contents = format!(
-        "title={}\nicon={}\nengine={}\npinned={}\nstarted={}\ncreated={}\n",
+        "title={}\ndirectory={}\nicon={}\nengine={}\npinned={}\nstarted={}\ncreated={}\n",
         conversation.title,
+        conversation.path.file_name().ok_or_else(|| anyhow!("conversation path has no directory name"))?.to_string_lossy(),
         conversation.icon.replace('\n', " "),
         conversation.engine.label().to_lowercase(),
         conversation.pinned,
@@ -229,6 +274,13 @@ fn validate_name(name: &str) -> Result<()> {
         || Path::new(name).components().count() != 1
     {
         bail!("conversation titles must be a single safe directory name");
+    }
+    Ok(())
+}
+
+fn validate_title(title: &str) -> Result<()> {
+    if title.is_empty() || title.chars().any(char::is_control) {
+        bail!("conversation title must not be empty or contain control characters");
     }
     Ok(())
 }
@@ -288,6 +340,21 @@ fn directory_name(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_TEST_DIR: AtomicUsize = AtomicUsize::new(0);
+
+    fn test_config() -> Config {
+        let unique = NEXT_TEST_DIR.fetch_add(1, Ordering::Relaxed);
+        let chats_dir = std::env::temp_dir().join(format!(
+            "lmchatty-storage-test-{}-{unique}",
+            std::process::id()
+        ));
+        Config {
+            enabled_agents: vec![Engine::Codex],
+            chats_dir,
+        }
+    }
     #[test]
     fn hash_is_short_hex() {
         let hash = short_hash("test", 1, Path::new("/definitely-not-real"));
@@ -298,5 +365,99 @@ mod tests {
     fn rejects_paths() {
         assert!(validate_name("../outside").is_err());
         assert!(validate_name("line\nbreak").is_err());
+    }
+
+    #[test]
+    fn rename_changes_only_title_and_preserves_work_directory() {
+        let config = test_config();
+        let conversation = create_conversation(&config, Engine::Codex, "Original", None).unwrap();
+        let marker = conversation.path.join("keep.txt");
+        fs::write(&marker, "untouched").unwrap();
+
+        rename_conversation(&conversation, "Software Reimplementation").unwrap();
+        let reloaded = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(reloaded.title, "Software Reimplementation");
+        assert_eq!(reloaded.path, conversation.path);
+        assert_eq!(fs::read_to_string(marker).unwrap(), "untouched");
+        assert!(!conversation.hash_dir.join("Software Reimplementation").exists());
+        assert!(fs::read_to_string(conversation.hash_dir.join(META_FILE))
+            .unwrap()
+            .contains("directory=Original\n"));
+        fs::remove_dir_all(config.chats_dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_metadata_keeps_original_directory_after_rename() {
+        let config = test_config();
+        let hash_dir = config.chats_dir.join("legacy123");
+        fs::create_dir_all(hash_dir.join("Old title")).unwrap();
+        fs::write(hash_dir.join(META_FILE), "title=Old title\nengine=codex\n").unwrap();
+        let old = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(old.path, hash_dir.join("Old title"));
+
+        rename_conversation(&old, "New / display title").unwrap();
+        let reloaded = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(reloaded.title, "New / display title");
+        assert_eq!(reloaded.path, old.path);
+        fs::remove_dir_all(config.chats_dir).unwrap();
+    }
+
+    #[test]
+    fn missing_title_uses_directory_name_as_display_fallback() {
+        let config = test_config();
+        let hash_dir = config.chats_dir.join("legacy123");
+        fs::create_dir_all(hash_dir.join("Workspace name")).unwrap();
+        fs::write(hash_dir.join(META_FILE), "engine=codex\n").unwrap();
+        let conversation = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(conversation.title, "Workspace name");
+        assert_eq!(conversation.path, hash_dir.join("Workspace name"));
+
+        rename_by_hash(&config, "legacy", "Programmatic title").unwrap();
+        let updated = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(updated.title, "Programmatic title");
+        assert_eq!(updated.path, conversation.path);
+        fs::remove_dir_all(config.chats_dir).unwrap();
+    }
+
+    #[test]
+    fn explicit_directory_works_without_title() {
+        let config = test_config();
+        let hash_dir = config.chats_dir.join("legacy123");
+        fs::create_dir_all(hash_dir.join("Original")).unwrap();
+        fs::write(hash_dir.join(META_FILE), "directory=Original\n").unwrap();
+        let conversation = load_conversations(&config).unwrap().remove(0);
+        assert_eq!(conversation.title, "Original");
+        fs::remove_dir_all(config.chats_dir).unwrap();
+    }
+
+    #[test]
+    fn current_path_rename_selects_containing_conversation() {
+        let config = test_config();
+        let first = create_conversation(&config, Engine::Codex, "First", None).unwrap();
+        let second = create_conversation(&config, Engine::Codex, "Second", None).unwrap();
+        let nested = first.path.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        rename_for_path(&config, &nested, "Selected by path").unwrap();
+        let conversations = load_conversations(&config).unwrap();
+        assert_eq!(
+            conversations.iter().find(|item| item.hash == first.hash).unwrap().title,
+            "Selected by path"
+        );
+        assert_eq!(
+            conversations.iter().find(|item| item.hash == second.hash).unwrap().title,
+            "Second"
+        );
+        fs::remove_dir_all(config.chats_dir).unwrap();
+    }
+
+    #[test]
+    fn invalid_display_title_cannot_change_metadata() {
+        let config = test_config();
+        let conversation = create_conversation(&config, Engine::Codex, "Original", None).unwrap();
+        for title in ["", "   ", "bad\nname"] {
+            assert!(rename_conversation(&conversation, title).is_err());
+        }
+        assert_eq!(load_conversations(&config).unwrap()[0].title, "Original");
+        fs::remove_dir_all(config.chats_dir).unwrap();
     }
 }

@@ -84,6 +84,7 @@ pub(crate) struct App {
     status: String,
     search_rect: Rect,
     list_rect: Rect,
+    rename_rect: Rect,
     new_engine_rect: Rect,
     new_title_rect: Rect,
     new_icon_rect: Rect,
@@ -149,6 +150,7 @@ impl App {
             status: String::new(),
             search_rect: Rect::default(),
             list_rect: Rect::default(),
+            rename_rect: Rect::default(),
             new_engine_rect: Rect::default(),
             new_title_rect: Rect::default(),
             new_icon_rect: Rect::default(),
@@ -266,7 +268,7 @@ impl App {
             Mode::Search => self.handle_search_key(key),
             Mode::New => self.handle_new_key(key),
             Mode::Setup => self.handle_setup_key(key),
-            Mode::Chat(_) => Ok(AppAction::Quit),
+            Mode::Chat(_) | Mode::Rename { .. } => Ok(AppAction::Quit),
         }
     }
 
@@ -322,6 +324,7 @@ impl App {
                 KeyCode::Char(' ') if !self.visible().is_empty() => {
                     self.modal = Some(Modal::Actions { selected: 0 })
                 }
+                KeyCode::Char('r') if !self.visible().is_empty() => self.open_rename(),
                 KeyCode::Char('n') => {
                     self.search_focused = false;
                     self.enter_new();
@@ -358,6 +361,7 @@ impl App {
                 KeyCode::Char(' ') if !self.visible().is_empty() => {
                     self.modal = Some(Modal::Actions { selected: 0 })
                 }
+                KeyCode::Char('r') if !self.visible().is_empty() => self.open_rename(),
                 KeyCode::Char('q') | KeyCode::Esc => {}
                 _ => {}
             }
@@ -727,14 +731,16 @@ impl App {
         match &self.page {
             Mode::Search => self.handle_search_mouse(mouse),
             Mode::New => self.handle_new_mouse(mouse),
-            Mode::Chat(_) | Mode::Setup => Ok(AppAction::None),
+            Mode::Chat(_) | Mode::Rename { .. } | Mode::Setup => Ok(AppAction::None),
         }
     }
 
     fn handle_search_mouse(&mut self, mouse: MouseEvent) -> Result<AppAction> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                if point_in(self.search_rect, mouse.column, mouse.row) {
+                if point_in(self.rename_rect, mouse.column, mouse.row) {
+                    self.open_rename();
+                } else if point_in(self.search_rect, mouse.column, mouse.row) {
                     self.search_focused = true;
                     self.search.set_insert();
                 } else if point_in(self.list_rect, mouse.column, mouse.row) {
@@ -824,6 +830,15 @@ impl App {
         }
         let index = self.list_state.offset() / 2 + (offset_row / LIST_ITEM_HEIGHT) as usize;
         (index < self.visible().len()).then_some(index)
+    }
+
+    fn open_rename(&mut self) {
+        if let Some(conversation) = self.selected_conversation() {
+            self.modal = Some(Modal::Edit {
+                kind: EditKind::Rename,
+                field: VimField::new(conversation.title),
+            });
+        }
     }
 }
 
@@ -944,6 +959,25 @@ pub fn run_tui(
 mod tests {
     use super::*;
 
+    fn search_app() -> App {
+        let config = Config {
+            enabled_agents: vec![Engine::Codex],
+            chats_dir: PathBuf::from("/tmp/lmchatty-ui-test"),
+        };
+        let conversation = Conversation {
+            hash: "12345678".into(),
+            title: "Original title".into(),
+            icon: "⬜".into(),
+            engine: Engine::Codex,
+            pinned: false,
+            started: false,
+            created: 1,
+            hash_dir: config.chats_dir.join("12345678"),
+            path: config.chats_dir.join("12345678/Original title"),
+        };
+        App::new(Mode::Search, vec![conversation], config)
+    }
+
     fn test_app() -> App {
         let config = Config {
             enabled_agents: Vec::new(),
@@ -984,5 +1018,39 @@ mod tests {
             vec![Engine::Codex, Engine::OpenCode, Engine::Claude]
         );
         assert_eq!(app.setup_enabled, vec![true, true, false]);
+    }
+
+    #[test]
+    fn rename_button_opens_edit_for_selected_conversation() {
+        let mut app = search_app();
+        app.rename_rect = Rect::new(40, 20, 10, 1);
+        app.handle_search_mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 45,
+            row: 20,
+            modifiers: KeyModifiers::NONE,
+        })
+        .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Edit {
+                kind: EditKind::Rename,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn rename_shortcut_opens_edit_for_selected_conversation() {
+        let mut app = search_app();
+        app.handle_search_key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE))
+            .unwrap();
+        assert!(matches!(
+            app.modal,
+            Some(Modal::Edit {
+                kind: EditKind::Rename,
+                ..
+            })
+        ));
     }
 }

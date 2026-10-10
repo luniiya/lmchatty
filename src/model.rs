@@ -5,6 +5,7 @@ pub enum Mode {
     Search,
     New,
     Chat(String),
+    Rename { hash: Option<String>, title: String },
     Setup,
 }
 
